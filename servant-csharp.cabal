@@ -2,9 +2,9 @@
 -- documentation, see http://haskell.org/cabal/users-guide/
 
 name:                servant-csharp
-version:             0.1.0.0
+version:             0.0.1.0
 synopsis:            Generate servant client library for C#
--- description:         
+description:         Generate servant client library for C#
 homepage:            https://github.com/cutsea110/servant-csharp.git
 license:             BSD3
 license-file:        LICENSE
