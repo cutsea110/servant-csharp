@@ -1,7 +1,8 @@
 module CS ( csForAPI
           , csForAPIWith
 
-          , defTemplate
+          , GenerateCsConfig(..)
+          , def
           ) where
 
 import CS.JsonDotNet
