@@ -1,5 +1,7 @@
-module CS ( csForAPI
-          , csForAPIWith
+module CS ( apiCsForAPI
+          , apiCsForAPIWith
+          , enumCsForAPI
+          , enumCsForAPIWith
 
           , GenerateCsConfig(..)
           , def
