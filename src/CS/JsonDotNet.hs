@@ -8,6 +8,8 @@ module CS.JsonDotNet ( apiCsForAPI
                      , apiCsForAPIWith
                      , enumCsForAPI
                      , enumCsForAPIWith
+                     , converterCsForAPI
+                     , converterCsForAPIWith
 
                      , GenerateCsConfig(..)
                      , def
@@ -39,6 +41,7 @@ data GenerateCsConfig
                                      -> Proxy api
                                      -> IO String
                        , enumtemplate :: GenerateCsConfig -> IO String
+                       , convtemplate :: GenerateCsConfig -> IO String
                        , sources :: [FilePath]
                        }
 
@@ -46,6 +49,7 @@ def :: GenerateCsConfig
 def = GenerateCsConfig { namespace = "ServantClientAPI"
                        , apitemplate = defAPITemplate
                        , enumtemplate = defEnumTemplate
+                       , convtemplate = defConvTemplate
                        , sources = []
                        }
 
@@ -197,6 +201,12 @@ enumCsForAPI = enumCsForAPIWith def
 enumCsForAPIWith :: GenerateCsConfig -> IO String
 enumCsForAPIWith conf = (enumtemplate conf) conf
 
+converterCsForAPI :: IO String
+converterCsForAPI = converterCsForAPIWith def
+
+converterCsForAPIWith :: GenerateCsConfig -> IO String
+converterCsForAPIWith conf = (convtemplate conf) conf
+
 defAPITemplate :: (HasForeign CSharp Text api,
                 GenerateList Text (Foreign Text api)) =>
                GenerateCsConfig -> Proxy api -> IO String
@@ -309,3 +319,30 @@ namespace ${namespace conf}
 }
 |]
 
+defConvTemplate conf = do
+  return [heredoc|
+using Newtonsoft.Json;
+using System;
+
+namespace ${namespace conf}
+{
+    public class DayConverter : JsonConverter
+    {
+        public override bool CanConvert(Type objectType)
+        {
+            return objectType == typeof(DateTime);
+        }
+
+        public override object ReadJson(JsonReader reader, Type objectType, object existingValue, JsonSerializer serializer)
+        {
+            return DateTime.Parse((string)reader.Value);
+        }
+
+        public override void WriteJson(JsonWriter writer, object value, JsonSerializer serializer)
+        {
+            DateTime d = (DateTime)value;
+            writer.WriteValue(d.ToString("yyyy-MM-dd"));
+        }
+    }
+}
+|]
