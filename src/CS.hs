@@ -1,4 +1,6 @@
-module CS ( apiCsForAPI
+module CS ( classCsForAPI
+          , classCsForAPIWith
+          , apiCsForAPI
           , apiCsForAPIWith
           , enumCsForAPI
           , enumCsForAPIWith

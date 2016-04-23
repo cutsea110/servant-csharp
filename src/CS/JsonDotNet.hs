@@ -4,7 +4,9 @@
 {-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-module CS.JsonDotNet ( apiCsForAPI
+module CS.JsonDotNet ( classCsForAPI
+                     , classCsForAPIWith
+                     , apiCsForAPI
                      , apiCsForAPIWith
                      , enumCsForAPI
                      , enumCsForAPIWith
@@ -98,43 +100,44 @@ classTypes conf = do
   enums <- fmap (map fst) $ enumTypes conf
   aliases <- usingAliases conf
   classTypesFromFiles enums aliases (sources conf)
+    where
+      classTypesFromFiles :: [String] -> [(String, FieldType)] -> [FilePath]
+                          -> IO [(String, [(String, FieldType)])]
+      classTypesFromFiles enums aliases hss
+          = return . concat =<< mapM (classTypesFromFile enums aliases) hss
 
-classTypesFromFiles :: [String] -> [(String, FieldType)] -> [FilePath]
-                    -> IO [(String, [(String, FieldType)])]
-classTypesFromFiles enums aliases hss = do
-  return . concat =<< mapM (classTypesFromFile enums aliases) hss
-
-classTypesFromFile :: [String] -> [(String, FieldType)] -> FilePath
-                   -> IO [(String, [(String, FieldType)])]
-classTypesFromFile enums aliases hs = do
-  ParseOk (Module _ _ _ _ _ _ decls) <- parseFile hs
-  let xs = filter isDatatypeDecl decls
-  return $ map toClass xs
-      where
-        toClass (DataDecl _ _ _ _ _ [qcon] _)
-            = toClass' qcon
-        toClass' (QualConDecl _ _ _ (RecDecl (Ident name) fs))
-            = (name, map field fs)
-        field ((Ident fname):[], ts)
-            = (fname, toType ts)
-        toType :: Type -> FieldType
-        toType (TyCon (UnQual (Ident t)))
-            = case t of
-                "String" -> TString
-                "Text" -> TString
-                "Int" -> TInt
-                "Integer" -> TInt
-                "Day" -> TDay
-                "UTCTime" -> TUTCTime
-                _ -> if t `elem` enums
-                     then TEnum t
-                     else maybe (TGeneral t) (TNewtype t) $ lookup t aliases
-        toType (TyApp (TyCon (UnQual (Ident "Maybe"))) t)
-            = case toType t of
-                TList t -> TList t
-                t -> TNullable t
-        toType (TyList t) = TList (toType t)
-        toType _ = error "don't support this Type"
+      classTypesFromFile :: [String] -> [(String, FieldType)] -> FilePath
+                         -> IO [(String, [(String, FieldType)])]
+      classTypesFromFile enums aliases hs = do
+        ParseOk (Module _ _ _ _ _ _ decls) <- parseFile hs
+        let xs = filter isDatatypeDecl decls
+        return $ map toClass xs
+            where
+              toClass (DataDecl _ _ _ _ _ [qcon] _)
+                  = toClass' qcon
+              toClass' (QualConDecl _ _ _ (RecDecl (Ident name) fs))
+                  = (name, map field fs)
+              field ((Ident fname):[], ts)
+                  = (fname, toType ts)
+              toType :: Type -> FieldType
+              toType (TyCon (UnQual (Ident t)))
+                  = case t of
+                      "String" -> TString
+                      "Text" -> TString
+                      "Int" -> TInt
+                      "Integer" -> TInt
+                      "Day" -> TDay
+                      "UTCTime" -> TUTCTime
+                      _ -> if t `elem` enums
+                           then TEnum t
+                           else maybe (TGeneral t) (TNewtype t)
+                                    $ lookup t aliases
+              toType (TyApp (TyCon (UnQual (Ident "Maybe"))) t)
+                  = case toType t of
+                      TList t -> TList t
+                      t -> TNullable t
+              toType (TyList t) = TList (toType t)
+              toType _ = error "don't support this Type"
 
 --------------------------------------------------------------------------
 isEnumLikeDataDecl :: Decl -> Bool
@@ -283,6 +286,12 @@ rqBody req = maybe [] (pure . (T.unpack &&& const jsonReqBodyName))
 
 requestBodyExists :: Req Text -> Bool
 requestBodyExists = not . null . rqBody
+
+classCsForAPI :: IO String
+classCsForAPI = classCsForAPIWith def
+
+classCsForAPIWith :: GenerateCsConfig -> IO String
+classCsForAPIWith conf = (classtemplate conf) conf
 
 apiCsForAPI :: (HasForeign CSharp Text api,
              GenerateList Text (Foreign Text api)) =>
