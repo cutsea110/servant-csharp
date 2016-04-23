@@ -58,6 +58,14 @@ isDatatypeDecl :: Decl -> Bool
 isDatatypeDecl (DataDecl _ DataType _ _ _ _ _) = True
 isDatatypeDecl _ = False
 
+classTypes :: GenerateCsConfig -> IO [(String, [(String, String)])]
+classTypes = classTypesFromFiles . sources
+
+classTypesFromFiles :: [FilePath] -> IO [(String, [(String, String)])]
+classTypesFromFiles hss = do
+  return . concat =<< mapM classTypesFromFile hss
+
+classTypesFromFile :: FilePath -> IO [(String, [(String, String)])]
 classTypesFromFile hs = do
   ParseOk (Module _ _ _ _ _ _ decls) <- parseFile hs
   let xs = filter isDatatypeDecl decls
