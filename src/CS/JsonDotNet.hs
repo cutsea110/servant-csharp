@@ -81,17 +81,22 @@ instance Show FieldType where
     show (TNullable TString) = "string"
     show (TNullable TDay) = "DateTime?"
     show (TNullable TUTCTime) = "DateTime?"
+    show (TNullable (TEnum t)) = show (TEnum t)<>"?"
     show (TNullable t) = "Nullable<"<>show t<>">"
 
 classTypes :: GenerateCsConfig -> IO [(String, [(String, FieldType)])]
-classTypes = classTypesFromFiles . sources
+classTypes conf = do
+  enums <- fmap (map fst) $ enumTypes conf
+  classTypesFromFiles enums (sources conf)
 
-classTypesFromFiles :: [FilePath] -> IO [(String, [(String, FieldType)])]
-classTypesFromFiles hss = do
-  return . concat =<< mapM classTypesFromFile hss
+classTypesFromFiles :: [String] -> [FilePath]
+                    -> IO [(String, [(String, FieldType)])]
+classTypesFromFiles enums hss = do
+  return . concat =<< mapM (classTypesFromFile enums) hss
 
-classTypesFromFile :: FilePath -> IO [(String, [(String, FieldType)])]
-classTypesFromFile hs = do
+classTypesFromFile :: [String] -> FilePath
+                   -> IO [(String, [(String, FieldType)])]
+classTypesFromFile enums hs = do
   ParseOk (Module _ _ _ _ _ _ decls) <- parseFile hs
   let xs = filter isDatatypeDecl decls
   return $ map toClass xs
@@ -111,7 +116,9 @@ classTypesFromFile hs = do
                 "Integer" -> TInt
                 "Day" -> TDay
                 "UTCTime" -> TUTCTime
-                _ -> TGeneral t
+                _ -> if t `elem` enums
+                     then TEnum t
+                     else TGeneral t
         toType (TyApp (TyCon (UnQual (Ident "Maybe"))) t)
             = case toType t of
                 TList t -> TList t
@@ -298,16 +305,20 @@ namespace ${namespace conf}
 {
     $forall (name, fields) <- classes
       #region ${name}
+      [JsonObject("${name}")]
       public class ${name}
       {
           $forall (fname, ftype) <- fields
             $case ftype
               $of TDay
-                [JsonProperty(PropertyName = "${fname}"]
+                [JsonProperty(PropertyName = "${fname}")]
                 [JsonConverter(typeof(DayConverter))]
               $of TNullable TDay
-                [JsonProperty(PropertyName = "${fname}"]
+                [JsonProperty(PropertyName = "${fname}")]
                 [JsonConverter(typeof(DayConverter))]
+              $of TEnum _
+                [JsonProperty(PropertyName = "${fname}")]
+                [JsonConverter(typeof(StringEnumConverter))]
               $of TList (TEnum _)
                 [JsonProperty(PropertyName = "${fname}", ItemConverterType = typeof(StringEnumConverter))]
               $of _
