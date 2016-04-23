@@ -34,6 +34,7 @@ import CS.Common (CSharp, getEndpoints)
 
 data GenerateCsConfig
     = GenerateCsConfig { namespace :: String
+                       , classtemplate :: GenerateCsConfig -> IO String
                        , apitemplate ::  forall api.
                                          (HasForeign CSharp Text api,
                                           GenerateList Text (Foreign Text api))
@@ -47,6 +48,7 @@ data GenerateCsConfig
 
 def :: GenerateCsConfig
 def = GenerateCsConfig { namespace = "ServantClientAPI"
+                       , classtemplate = defClassTemplate
                        , apitemplate = defAPITemplate
                        , enumtemplate = defEnumTemplate
                        , convtemplate = defConvTemplate
@@ -55,7 +57,7 @@ def = GenerateCsConfig { namespace = "ServantClientAPI"
 
 --------------------------------------------------------------------------
 isDatatypeDecl :: Decl -> Bool
-isDatatypeDecl (DataDecl _ DataType _ _ _ _ _) = True
+isDatatypeDecl (DataDecl _ DataType _ _ _ [qcon] _) = True
 isDatatypeDecl _ = False
 
 classTypes :: GenerateCsConfig -> IO [(String, [(String, String)])]
@@ -255,6 +257,34 @@ converterCsForAPI = converterCsForAPIWith def
 
 converterCsForAPIWith :: GenerateCsConfig -> IO String
 converterCsForAPIWith conf = (convtemplate conf) conf
+
+defClassTemplate :: GenerateCsConfig -> IO String
+defClassTemplate conf = do
+  uas <- usingAliases conf
+  classes <- classTypes conf
+  return [heredoc|
+using Newtonsoft.Json;
+using System;
+using System.Collections.Generic;
+
+#region type alias
+$forall (n, t) <- uas
+  using ${n} = ${t};
+#endregion
+
+namespace ${namespace conf}
+{
+    $forall (name, fields) <- classes
+      #region ${name}
+      public class ${name}
+      {
+          $forall (fname, ftype) <- fields
+            [JsonProperty(PropertyName = "${fname}")]
+            public ${ftype} ${fname} { get; set; }
+      }
+      #endregion
+}
+|]
 
 defAPITemplate :: (HasForeign CSharp Text api,
                 GenerateList Text (Foreign Text api)) =>
