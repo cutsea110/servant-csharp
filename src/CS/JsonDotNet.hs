@@ -60,14 +60,37 @@ isDatatypeDecl :: Decl -> Bool
 isDatatypeDecl (DataDecl _ DataType _ _ _ [qcon] _) = True
 isDatatypeDecl _ = False
 
-classTypes :: GenerateCsConfig -> IO [(String, [(String, String)])]
+data FieldType = TInt
+               | TString
+               | TDay
+               | TUTCTime
+               | TEnum String
+               | TGeneral String
+               | TList FieldType
+               | TNullable FieldType
+
+instance Show FieldType where
+    show TInt = "int"
+    show TString = "string"
+    show TDay = "DateTime"
+    show TUTCTime = "DateTime"
+    show (TEnum s) = s
+    show (TGeneral s) = s
+    show (TList t) = "List<"<>show t<>">"
+    show (TNullable TInt) = "int?"
+    show (TNullable TString) = "string"
+    show (TNullable TDay) = "DateTime?"
+    show (TNullable TUTCTime) = "DateTime?"
+    show (TNullable t) = "Nullable<"<>show t<>">"
+
+classTypes :: GenerateCsConfig -> IO [(String, [(String, FieldType)])]
 classTypes = classTypesFromFiles . sources
 
-classTypesFromFiles :: [FilePath] -> IO [(String, [(String, String)])]
+classTypesFromFiles :: [FilePath] -> IO [(String, [(String, FieldType)])]
 classTypesFromFiles hss = do
   return . concat =<< mapM classTypesFromFile hss
 
-classTypesFromFile :: FilePath -> IO [(String, [(String, String)])]
+classTypesFromFile :: FilePath -> IO [(String, [(String, FieldType)])]
 classTypesFromFile hs = do
   ParseOk (Module _ _ _ _ _ _ decls) <- parseFile hs
   let xs = filter isDatatypeDecl decls
@@ -79,23 +102,21 @@ classTypesFromFile hs = do
             = (name, map field fs)
         field ((Ident fname):[], ts)
             = (fname, toType ts)
-        toType :: Type -> String
+        toType :: Type -> FieldType
         toType (TyCon (UnQual (Ident t)))
             = case t of
-                "String" -> "string"
-                "Text" -> "string"
-                "Int" -> "int"
-                "Integer" -> "int"
-                "Day" -> "DateTime"
-                "UTCTime" -> "DateTime"
-                _ -> t
+                "String" -> TString
+                "Text" -> TString
+                "Int" -> TInt
+                "Integer" -> TInt
+                "Day" -> TDay
+                "UTCTime" -> TUTCTime
+                _ -> TGeneral t
         toType (TyApp (TyCon (UnQual (Ident "Maybe"))) t)
             = case toType t of
-                "string" -> "string"
-                "int" -> "int?"
-                "DateTime" -> "DateTime?"
-                t' -> "Nullable<" <> t' <> ">"
-        toType (TyList t) = "List<" <> toType t <> ">"
+                TList t -> TList t
+                t -> TNullable t
+        toType (TyList t) = TList (toType t)
         toType _ = error "don't support this Type"
 
 --------------------------------------------------------------------------
@@ -264,6 +285,7 @@ defClassTemplate conf = do
   classes <- classTypes conf
   return [heredoc|
 using Newtonsoft.Json;
+using Newtonsoft.Converters;
 using System;
 using System.Collections.Generic;
 
@@ -279,8 +301,18 @@ namespace ${namespace conf}
       public class ${name}
       {
           $forall (fname, ftype) <- fields
-            [JsonProperty(PropertyName = "${fname}")]
-            public ${ftype} ${fname} { get; set; }
+            $case ftype
+              $of TDay
+                [JsonProperty(PropertyName = "${fname}"]
+                [JsonConverter(typeof(DayConverter))]
+              $of TNullable TDay
+                [JsonProperty(PropertyName = "${fname}"]
+                [JsonConverter(typeof(DayConverter))]
+              $of TList (TEnum _)
+                [JsonProperty(PropertyName = "${fname}", ItemConverterType = typeof(StringEnumConverter))]
+              $of _
+                [JsonProperty(PropertyName = "${fname}")]
+            public ${show ftype} ${fname} { get; set; }
       }
       #endregion
 }
