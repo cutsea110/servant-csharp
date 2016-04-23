@@ -54,6 +54,41 @@ def = GenerateCsConfig { namespace = "ServantClientAPI"
                        }
 
 --------------------------------------------------------------------------
+isDatatypeDecl :: Decl -> Bool
+isDatatypeDecl (DataDecl _ DataType _ _ _ _ _) = True
+isDatatypeDecl _ = False
+
+classTypesFromFile hs = do
+  ParseOk (Module _ _ _ _ _ _ decls) <- parseFile hs
+  let xs = filter isDatatypeDecl decls
+  return $ map toClass xs
+      where
+        toClass (DataDecl _ _ _ _ _ [qcon] _)
+            = toClass' qcon
+        toClass' (QualConDecl _ _ _ (RecDecl (Ident name) fs))
+            = (name, map field fs)
+        field ((Ident fname):[], ts)
+            = (fname, toType ts)
+        toType :: Type -> String
+        toType (TyCon (UnQual (Ident t)))
+            = case t of
+                "String" -> "string"
+                "Text" -> "string"
+                "Int" -> "int"
+                "Integer" -> "int"
+                "Day" -> "DateTime"
+                "UTCTime" -> "DateTime"
+                _ -> t
+        toType (TyApp (TyCon (UnQual (Ident "Maybe"))) t)
+            = case toType t of
+                "string" -> "string"
+                "int" -> "int?"
+                "DateTime" -> "DateTime?"
+                t' -> "Nullable<" <> t' <> ">"
+        toType (TyList t) = "List<" <> toType t <> ">"
+        toType _ = error "don't support this Type"
+
+--------------------------------------------------------------------------
 isEnumLikeDataDecl :: Decl -> Bool
 isEnumLikeDataDecl (DataDecl _ DataType _ _ _ xs _)
     = all isEnumLikeConDecl xs
