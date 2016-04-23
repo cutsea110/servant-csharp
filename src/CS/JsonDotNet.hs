@@ -66,6 +66,7 @@ data FieldType = TInt
                | TUTCTime
                | TEnum String
                | TGeneral String
+               | TNewtype String FieldType
                | TList FieldType
                | TNullable FieldType
 
@@ -76,27 +77,36 @@ instance Show FieldType where
     show TUTCTime = "DateTime"
     show (TEnum s) = s
     show (TGeneral s) = s
+    show (TNewtype s _) = s
     show (TList t) = "List<"<>show t<>">"
     show (TNullable TInt) = "int?"
     show (TNullable TString) = "string"
     show (TNullable TDay) = "DateTime?"
     show (TNullable TUTCTime) = "DateTime?"
     show (TNullable (TEnum t)) = show (TEnum t)<>"?"
+    show (TNullable (TNewtype s TString)) = s
+    show (TNullable (TNewtype s _)) = "Nullable<"<>s<>">"
     show (TNullable t) = "Nullable<"<>show t<>">"
+
+showCSharpOriginalType :: FieldType -> String
+showCSharpOriginalType TInt = "System.Int64"
+showCSharpOriginalType TString = "System.String"
+showCSharpOriginalType _ = error "don't support this type."
 
 classTypes :: GenerateCsConfig -> IO [(String, [(String, FieldType)])]
 classTypes conf = do
   enums <- fmap (map fst) $ enumTypes conf
-  classTypesFromFiles enums (sources conf)
+  aliases <- usingAliases conf
+  classTypesFromFiles enums aliases (sources conf)
 
-classTypesFromFiles :: [String] -> [FilePath]
+classTypesFromFiles :: [String] -> [(String, FieldType)] -> [FilePath]
                     -> IO [(String, [(String, FieldType)])]
-classTypesFromFiles enums hss = do
-  return . concat =<< mapM (classTypesFromFile enums) hss
+classTypesFromFiles enums aliases hss = do
+  return . concat =<< mapM (classTypesFromFile enums aliases) hss
 
-classTypesFromFile :: [String] -> FilePath
+classTypesFromFile :: [String] -> [(String, FieldType)] -> FilePath
                    -> IO [(String, [(String, FieldType)])]
-classTypesFromFile enums hs = do
+classTypesFromFile enums aliases hs = do
   ParseOk (Module _ _ _ _ _ _ decls) <- parseFile hs
   let xs = filter isDatatypeDecl decls
   return $ map toClass xs
@@ -118,7 +128,7 @@ classTypesFromFile enums hs = do
                 "UTCTime" -> TUTCTime
                 _ -> if t `elem` enums
                      then TEnum t
-                     else TGeneral t
+                     else maybe (TGeneral t) (TNewtype t) $ lookup t aliases
         toType (TyApp (TyCon (UnQual (Ident "Maybe"))) t)
             = case toType t of
                 TList t -> TList t
@@ -161,30 +171,40 @@ isNewtypeDecl :: Decl -> Bool
 isNewtypeDecl (DataDecl _ NewType _ _ _ _ _) = True
 isNewtypeDecl _ = False
 
-origType :: QualConDecl -> String
-origType (QualConDecl _ _ _ (RecDecl _ [(_, TyCon (UnQual (Ident t)))]))
-    = case t of
-        "String"  -> "System.String"
-        "Text"    -> "System.String"
-        "Int"     -> "System.Int64"
-        "Integer" -> "System.Int64"
-        t         -> error "don't supported type. "<>t
+isTypeDecl :: Decl -> Bool
+isTypeDecl (TypeDecl _ _ _ _) = True
+isTypeDecl _ = False
 
-usingAliases :: GenerateCsConfig -> IO [(String, String)]
+origType :: QualConDecl -> FieldType
+origType (QualConDecl _ _ _ (RecDecl _ [(_, tycon)]))
+    = origType' tycon
+
+origType' :: Type -> FieldType
+origType' (TyCon (UnQual (Ident t)))
+    = case t of
+        "String"  -> TString
+        "Text"    -> TString
+        "Int"     -> TInt
+        "Integer" -> TInt
+        t         -> error ("don't supported type. "<>t)
+
+usingAliases :: GenerateCsConfig -> IO [(String, FieldType)]
 usingAliases = usingAliasesFromFiles . sources
     where
-      usingAliasesFromFiles :: [FilePath] -> IO [(String, String)]
+      usingAliasesFromFiles :: [FilePath] -> IO [(String, FieldType)]
       usingAliasesFromFiles hss
           = return . concat =<< mapM usingAliasesFromFile hss
 
-      usingAliasesFromFile :: FilePath -> IO [(String, String)]
+      usingAliasesFromFile :: FilePath -> IO [(String, FieldType)]
       usingAliasesFromFile hs = do
         ParseOk (Module _ _ _ _ _ _ decls) <- parseFile hs
-        let xs = filter isNewtypeDecl decls
+        let xs = filter (\d -> isNewtypeDecl d || isTypeDecl d) decls
         return $ map toTuple xs
             where
               toTuple (DataDecl _ NewType _ (Ident name) _ [qcon] _)
                   = (name, origType qcon)
+              toTuple (TypeDecl _ (Ident name) _ tycon)
+                  = (name, origType' tycon)
 
 --------------------------------------------------------------------------
 retType :: Req Text -> String
@@ -298,7 +318,7 @@ using System.Collections.Generic;
 
 #region type alias
 $forall (n, t) <- uas
-  using ${n} = ${t};
+  using ${n} = ${showCSharpOriginalType t};
 #endregion
 
 namespace ${namespace conf}
@@ -317,6 +337,9 @@ namespace ${namespace conf}
                 [JsonProperty(PropertyName = "${fname}")]
                 [JsonConverter(typeof(DayConverter))]
               $of TEnum _
+                [JsonProperty(PropertyName = "${fname}")]
+                [JsonConverter(typeof(StringEnumConverter))]
+              $of TNullable (TEnum _)
                 [JsonProperty(PropertyName = "${fname}")]
                 [JsonConverter(typeof(StringEnumConverter))]
               $of TList (TEnum _)
@@ -346,7 +369,7 @@ using System.Threading.Tasks;
 
 #region type alias
 $forall (n, t) <- uas
-  using ${n} = ${t};
+  using ${n} = ${showCSharpOriginalType t};
 #endregion
 
 namespace ${namespace conf}
