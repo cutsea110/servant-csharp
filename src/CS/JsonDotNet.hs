@@ -4,7 +4,9 @@
 {-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-module CS.JsonDotNet ( classCsForAPI
+module CS.JsonDotNet ( genCsForAPI
+
+                     , classCsForAPI
                      , classCsForAPIWith
                      , apiCsForAPI
                      , apiCsForAPIWith
@@ -12,6 +14,10 @@ module CS.JsonDotNet ( classCsForAPI
                      , enumCsForAPIWith
                      , converterCsForAPI
                      , converterCsForAPIWith
+                     , assemblyInfoCsForAPI
+                     , assemblyInfoCsForAPIWith
+                     , csprojForAPI
+                     , csprojForAPIWith
 
                      , GenerateCsConfig(..)
                      , def
@@ -34,16 +40,18 @@ import Data.UUID.Types (toString)
 import Data.UUID.V4 as UUID (nextRandom)
 import Language.Haskell.Exts
 import Servant.Foreign
+import System.Directory (createDirectoryIfMissing)
 import Text.Heredoc
 
 import CS.Common (CSharp, getEndpoints)
 
 data GenerateCsConfig
     = GenerateCsConfig { namespace :: String
+                       , outdir :: String
                        , classCsName :: String
                        , apiCsName :: String
                        , enumCsName :: String
-                       , convCsName :: String
+                       , converterCsName :: String
                        , classtemplate :: GenerateCsConfig -> IO String
                        , apitemplate ::  forall api.
                                          (HasForeign CSharp Text api,
@@ -52,26 +60,43 @@ data GenerateCsConfig
                                      -> Proxy api
                                      -> IO String
                        , enumtemplate :: GenerateCsConfig -> IO String
-                       , convtemplate :: GenerateCsConfig -> IO String
+                       , convertertemplate :: GenerateCsConfig -> IO String
                        , assemblyinfotemplate :: GenerateCsConfig -> IO String
+                       , csprojtemplate :: GenerateCsConfig -> IO String
                        , guid :: Maybe String
                        , sources :: [FilePath]
                        }
 
 def :: GenerateCsConfig
 def = GenerateCsConfig { namespace = "ServantClientAPI"
+                       , outdir = "gen"
                        , classCsName = "Classes.cs"
                        , apiCsName = "API.cs"
                        , enumCsName = "Enum.cs"
-                       , convCsName = "JsonConverter.cs"
+                       , converterCsName = "JsonConverter.cs"
                        , classtemplate = defClassTemplate
                        , apitemplate = defAPITemplate
                        , enumtemplate = defEnumTemplate
-                       , convtemplate = defConvTemplate
+                       , convertertemplate = defConvTemplate
                        , assemblyinfotemplate = defAssemblyInfoTemplate
+                       , csprojtemplate = defCsprojTemplate
                        , guid = Nothing
                        , sources = []
                        }
+
+genCsForAPI :: (HasForeign CSharp Text api,
+             GenerateList Text (Foreign Text api)) =>
+            GenerateCsConfig -> Proxy api -> IO ()
+genCsForAPI conf api = do
+  guid' <- maybe (toString <$> UUID.nextRandom) return $ guid conf
+  let conf' = conf { guid = Just guid' }
+  createDirectoryIfMissing True [heredoc|${outdir conf'}/${namespace conf'}/Properties|]
+  classCsForAPIWith conf' >>= writeFile [heredoc|${outdir conf'}/${namespace conf'}${classCsName conf'}|]
+  apiCsForAPIWith conf' api >>= writeFile [heredoc|${outdir conf'}/${namespace conf'}${apiCsName conf'}|]
+  enumCsForAPIWith conf' >>= writeFile [heredoc|${outdir conf'}/${namespace conf'}${enumCsName conf'}|]
+  converterCsForAPIWith conf' >>= writeFile [heredoc|${outdir conf'}/${namespace conf'}${converterCsName conf'}|]
+  assemblyInfoCsForAPIWith conf' >>= writeFile [heredoc|${outdir conf'}/${namespace conf'}/Properties/AssemblyInfo.cs|]
+  csprojForAPIWith conf' >>= writeFile [heredoc|${outdir conf'}/${namespace conf'}/${namespace conf'}.cs|]
 
 --------------------------------------------------------------------------
 isDatatypeDecl :: Decl -> Bool
@@ -329,7 +354,7 @@ converterCsForAPI :: IO String
 converterCsForAPI = converterCsForAPIWith def
 
 converterCsForAPIWith :: GenerateCsConfig -> IO String
-converterCsForAPIWith conf = (convtemplate conf) conf
+converterCsForAPIWith conf = (convertertemplate conf) conf
 
 defClassTemplate :: GenerateCsConfig -> IO String
 defClassTemplate conf = do
@@ -554,6 +579,13 @@ using System.Runtime.InteropServices;
 
 --------------------------------------------------------------------------
 
+csprojForAPI :: IO String
+csprojForAPI = csprojForAPIWith def
+
+csprojForAPIWith :: GenerateCsConfig -> IO String
+csprojForAPIWith conf = (csprojtemplate conf) conf
+
+defCsprojTemplate :: GenerateCsConfig -> IO String
 defCsprojTemplate conf = do
   guid <- maybe ((map toUpper . toString) <$> UUID.nextRandom) return $ guid conf
   return [heredoc|<?xml version="1.0" encoding="utf-8"?>
@@ -600,7 +632,7 @@ defCsprojTemplate conf = do
   </ItemGroup>
   <ItemGroup>
     <Compile Include="${apiCsName conf}" />
-    <Compile Include="${convCsName conf}" />
+    <Compile Include="${converterCsName conf}" />
     <Compile Include="${classCsName conf}" />
     <Compile Include="${enumCsName conf}" />
     <Compile Include="Properties\AssemblyInfo.cs" />

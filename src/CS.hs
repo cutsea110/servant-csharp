@@ -1,4 +1,6 @@
-module CS ( classCsForAPI
+module CS ( genCsForAPI
+
+          , classCsForAPI
           , classCsForAPIWith
           , apiCsForAPI
           , apiCsForAPIWith
@@ -6,6 +8,10 @@ module CS ( classCsForAPI
           , enumCsForAPIWith
           , converterCsForAPI
           , converterCsForAPIWith
+          , assemblyInfoCsForAPI
+          , assemblyInfoCsForAPIWith
+          , csprojForAPI
+          , csprojForAPIWith
 
           , GenerateCsConfig(..)
           , def
