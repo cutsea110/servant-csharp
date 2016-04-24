@@ -25,7 +25,7 @@ module CS.JsonDotNet ( genCsForAPI
 
 import Prelude hiding (concat, lines, unlines)
 import Control.Arrow
-import Control.Lens
+import Control.Lens hiding ((<.>))
 import Data.ByteString (ByteString)
 import Data.ByteString.Char8 as BC (unpack)
 import Data.Char (toUpper, toLower)
@@ -41,6 +41,7 @@ import Data.UUID.V4 as UUID (nextRandom)
 import Language.Haskell.Exts
 import Servant.Foreign
 import System.Directory (createDirectoryIfMissing)
+import System.FilePath ((</>), (<.>))
 import Text.Heredoc
 
 import CS.Common (CSharp, getEndpoints)
@@ -90,13 +91,13 @@ genCsForAPI :: (HasForeign CSharp Text api,
 genCsForAPI conf api = do
   guid' <- maybe (toString <$> UUID.nextRandom) return $ guid conf
   let conf' = conf { guid = Just guid' }
-  createDirectoryIfMissing True [heredoc|${outdir conf'}/${namespace conf'}/Properties|]
-  classCsForAPIWith conf' >>= writeFile [heredoc|${outdir conf'}/${namespace conf'}${classCsName conf'}|]
-  apiCsForAPIWith conf' api >>= writeFile [heredoc|${outdir conf'}/${namespace conf'}${apiCsName conf'}|]
-  enumCsForAPIWith conf' >>= writeFile [heredoc|${outdir conf'}/${namespace conf'}${enumCsName conf'}|]
-  converterCsForAPIWith conf' >>= writeFile [heredoc|${outdir conf'}/${namespace conf'}${converterCsName conf'}|]
-  assemblyInfoCsForAPIWith conf' >>= writeFile [heredoc|${outdir conf'}/${namespace conf'}/Properties/AssemblyInfo.cs|]
-  csprojForAPIWith conf' >>= writeFile [heredoc|${outdir conf'}/${namespace conf'}/${namespace conf'}.cs|]
+  createDirectoryIfMissing True $ outdir conf' </> namespace conf' </> "Properties"
+  classCsForAPIWith conf' >>= writeFile (outdir conf' </> namespace conf' </> classCsName conf')
+  apiCsForAPIWith conf' api >>= writeFile (outdir conf' </> namespace conf' </> apiCsName conf')
+  enumCsForAPIWith conf' >>= writeFile (outdir conf' </> namespace conf' </> enumCsName conf')
+  converterCsForAPIWith conf' >>= writeFile (outdir conf' </> namespace conf' </> converterCsName conf')
+  assemblyInfoCsForAPIWith conf' >>= writeFile (outdir conf' </> namespace conf' </> "Properties" </> "AssemblyInfo.cs")
+  csprojForAPIWith conf' >>= writeFile (outdir conf' </> namespace conf' </> namespace conf' <.> "csproj")
 
 --------------------------------------------------------------------------
 isDatatypeDecl :: Decl -> Bool
