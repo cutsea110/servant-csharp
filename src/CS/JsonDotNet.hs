@@ -526,11 +526,11 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
-[assembly: AssemblyTitle("ServantClientBook")]
+[assembly: AssemblyTitle("${namespace conf}")]
 [assembly: AssemblyDescription("")]
 [assembly: AssemblyConfiguration("")]
 [assembly: AssemblyCompany("")]
-[assembly: AssemblyProduct("ServantClientBook")]
+[assembly: AssemblyProduct("${namespace conf}")]
 [assembly: AssemblyCopyright("Copyright ©  ${show year}")]
 [assembly: AssemblyTrademark("")]
 [assembly: AssemblyCulture("")]
