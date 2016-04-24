@@ -28,6 +28,10 @@ import Data.Maybe (fromJust)
 import Data.Monoid ((<>))
 import Data.Proxy
 import Data.Text as T (Text, unpack, pack)
+import Data.Time.Clock (UTCTime(..), getCurrentTime)
+import Data.Time.Calendar (toGregorian)
+import Data.UUID.Types (toString)
+import Data.UUID.V4 as UUID (nextRandom)
 import Language.Haskell.Exts
 import Servant.Foreign
 import Text.Heredoc
@@ -45,6 +49,8 @@ data GenerateCsConfig
                                      -> IO String
                        , enumtemplate :: GenerateCsConfig -> IO String
                        , convtemplate :: GenerateCsConfig -> IO String
+                       , assemblyinfotemplate :: GenerateCsConfig -> IO String
+                       , guid :: Maybe String
                        , sources :: [FilePath]
                        }
 
@@ -54,6 +60,8 @@ def = GenerateCsConfig { namespace = "ServantClientAPI"
                        , apitemplate = defAPITemplate
                        , enumtemplate = defEnumTemplate
                        , convtemplate = defConvTemplate
+                       , assemblyinfotemplate = defAssemblyInfoTemplate
+                       , guid = Nothing
                        , sources = []
                        }
 
@@ -499,4 +507,39 @@ namespace ${namespace conf}
         }
     }
 }
+|]
+
+--------------------------------------------------------------------------
+
+assemblyInfoCsForAPI :: IO String
+assemblyInfoCsForAPI = assemblyInfoCsForAPIWith def
+
+assemblyInfoCsForAPIWith :: GenerateCsConfig -> IO String
+assemblyInfoCsForAPIWith conf = (assemblyinfotemplate conf) conf
+
+defAssemblyInfoTemplate :: GenerateCsConfig -> IO String
+defAssemblyInfoTemplate conf = do
+  (year, _, _) <- fmap (toGregorian . utctDay) getCurrentTime
+  guid <- maybe (toString <$> UUID.nextRandom) return $ guid conf
+  return [heredoc|
+using System.Reflection;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+
+[assembly: AssemblyTitle("ServantClientBook")]
+[assembly: AssemblyDescription("")]
+[assembly: AssemblyConfiguration("")]
+[assembly: AssemblyCompany("")]
+[assembly: AssemblyProduct("ServantClientBook")]
+[assembly: AssemblyCopyright("Copyright ©  ${show year}")]
+[assembly: AssemblyTrademark("")]
+[assembly: AssemblyCulture("")]
+
+[assembly: ComVisible(false)]
+
+[assembly: Guid("${guid}")]
+
+// [assembly: AssemblyVersion("1.0.*")]
+[assembly: AssemblyVersion("1.0.0.0")]
+[assembly: AssemblyFileVersion("1.0.0.0")]
 |]
