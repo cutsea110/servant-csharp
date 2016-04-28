@@ -1,19 +1,4 @@
-module CS ( genCsForAPI
-
-          , classCsForAPI
-          , classCsForAPIWith
-          , apiCsForAPI
-          , apiCsForAPIWith
-          , enumCsForAPI
-          , enumCsForAPIWith
-          , converterCsForAPI
-          , converterCsForAPIWith
-          , assemblyInfoCsForAPI
-          , assemblyInfoCsForAPIWith
-          , csprojForAPI
-          , csprojForAPIWith
-
-          , GenerateCsConfig(..)
+module CS ( GenerateCsConfig(..)
           , def
           ) where
 

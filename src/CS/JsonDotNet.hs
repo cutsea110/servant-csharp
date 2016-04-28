@@ -1,255 +1,61 @@
 {-# LANGUAGE ExplicitForAll #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE GADTs #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-module CS.JsonDotNet ( genCsForAPI
-
-                     , classCsForAPI
-                     , classCsForAPIWith
-                     , apiCsForAPI
-                     , apiCsForAPIWith
-                     , enumCsForAPI
-                     , enumCsForAPIWith
-                     , converterCsForAPI
-                     , converterCsForAPIWith
-                     , assemblyInfoCsForAPI
-                     , assemblyInfoCsForAPIWith
-                     , csprojForAPI
-                     , csprojForAPIWith
-
-                     , GenerateCsConfig(..)
+{-# LANGUAGE TupleSections #-}
+module CS.JsonDotNet ( GenerateCsConfig(..)
                      , def
                      ) where
 
-import Prelude hiding (concat, lines, unlines)
-import Control.Arrow
-import Control.Lens hiding ((<.>))
+
+import Control.Arrow ((***), (&&&))
+import Control.Lens
+import Control.Monad.Trans
+import Control.Monad.Identity
+import Data.Aeson
 import Data.ByteString (ByteString)
 import Data.ByteString.Char8 as BC (unpack)
 import Data.Char (toUpper, toLower)
-import Data.List (intercalate, concat)
+import qualified Data.HashMap.Lazy as M
+import Data.List (intercalate)
 import Data.Maybe (fromJust)
 import Data.Monoid ((<>))
 import Data.Proxy
-import Data.Text as T (Text, unpack, pack)
+import Data.Swagger hiding (namespace)
+import Data.Text as T (Text, unpack)
 import Data.Time.Clock (UTCTime(..), getCurrentTime)
 import Data.Time.Calendar (toGregorian)
-import Data.UUID.Types (toString)
-import Data.UUID.V4 as UUID (nextRandom)
-import Language.Haskell.Exts
-import Servant.Foreign
 import System.Directory (createDirectoryIfMissing)
-import System.FilePath ((</>), (<.>))
+import Data.UUID.Types (toString, UUID)
+import Data.UUID.V4 as UUID (nextRandom)
+import Servant.Foreign
+import Servant.Swagger
 import Text.Heredoc
 
 import CS.Common (CSharp, getEndpoints)
+import CS.JsonDotNet.Internal
+import CS.JsonDotNet.Base
 
 data GenerateCsConfig
     = GenerateCsConfig { namespace :: String
-                       , outdir :: String
                        , classCsName :: String
                        , apiCsName :: String
                        , enumCsName :: String
                        , converterCsName :: String
-                       , classtemplate :: GenerateCsConfig -> IO String
-                       , apitemplate ::  forall api.
-                                         (HasForeign CSharp Text api,
-                                          GenerateList Text (Foreign Text api))
-                                         => GenerateCsConfig
-                                     -> Proxy api
-                                     -> IO String
-                       , enumtemplate :: GenerateCsConfig -> IO String
-                       , convertertemplate :: GenerateCsConfig -> IO String
-                       , assemblyinfotemplate :: GenerateCsConfig -> IO String
-                       , csprojtemplate :: GenerateCsConfig -> IO String
-                       , guid :: Maybe String
-                       , sources :: [FilePath]
+                       , guid :: Maybe UUID
                        }
 
 def :: GenerateCsConfig
 def = GenerateCsConfig { namespace = "ServantClientAPI"
-                       , outdir = "gen"
                        , classCsName = "Classes.cs"
                        , apiCsName = "API.cs"
                        , enumCsName = "Enum.cs"
                        , converterCsName = "JsonConverter.cs"
-                       , classtemplate = defClassTemplate
-                       , apitemplate = defAPITemplate
-                       , enumtemplate = defEnumTemplate
-                       , convertertemplate = defConvTemplate
-                       , assemblyinfotemplate = defAssemblyInfoTemplate
-                       , csprojtemplate = defCsprojTemplate
                        , guid = Nothing
-                       , sources = []
                        }
-
-genCsForAPI :: (HasForeign CSharp Text api,
-             GenerateList Text (Foreign Text api)) =>
-            GenerateCsConfig -> Proxy api -> IO ()
-genCsForAPI conf api = do
-  guid' <- maybe (toString <$> UUID.nextRandom) return $ guid conf
-  let conf' = conf { guid = Just guid' }
-  createDirectoryIfMissing True $ outdir conf' </> namespace conf' </> "Properties"
-  classCsForAPIWith conf' >>= writeFile (outdir conf' </> namespace conf' </> classCsName conf')
-  apiCsForAPIWith conf' api >>= writeFile (outdir conf' </> namespace conf' </> apiCsName conf')
-  enumCsForAPIWith conf' >>= writeFile (outdir conf' </> namespace conf' </> enumCsName conf')
-  converterCsForAPIWith conf' >>= writeFile (outdir conf' </> namespace conf' </> converterCsName conf')
-  assemblyInfoCsForAPIWith conf' >>= writeFile (outdir conf' </> namespace conf' </> "Properties" </> "AssemblyInfo.cs")
-  csprojForAPIWith conf' >>= writeFile (outdir conf' </> namespace conf' </> namespace conf' <.> "csproj")
-
---------------------------------------------------------------------------
-isDatatypeDecl :: Decl -> Bool
-isDatatypeDecl (DataDecl _ DataType _ _ _ [qcon] _) = True
-isDatatypeDecl _ = False
-
-data FieldType = TInt
-               | TString
-               | TDay
-               | TUTCTime
-               | TEnum String
-               | TGeneral String
-               | TNewtype String FieldType
-               | TList FieldType
-               | TNullable FieldType
-
-instance Show FieldType where
-    show TInt = "int"
-    show TString = "string"
-    show TDay = "DateTime"
-    show TUTCTime = "DateTime"
-    show (TEnum s) = s
-    show (TGeneral s) = s
-    show (TNewtype s _) = s
-    show (TList t) = "List<"<>show t<>">"
-    show (TNullable TInt) = "int?"
-    show (TNullable TString) = "string"
-    show (TNullable TDay) = "DateTime?"
-    show (TNullable TUTCTime) = "DateTime?"
-    show (TNullable (TEnum t)) = show (TEnum t)<>"?"
-    show (TNullable (TNewtype s TString)) = s
-    show (TNullable (TNewtype s _)) = "Nullable<"<>s<>">"
-    show (TNullable t) = "Nullable<"<>show t<>">"
-
-showCSharpOriginalType :: FieldType -> String
-showCSharpOriginalType TInt = "System.Int64"
-showCSharpOriginalType TString = "System.String"
-showCSharpOriginalType _ = error "don't support this type."
-
-classTypes :: GenerateCsConfig -> IO [(String, [(String, FieldType)])]
-classTypes conf = do
-  enums <- fmap (map fst) $ enumTypes conf
-  aliases <- usingAliases conf
-  classTypesFromFiles enums aliases (sources conf)
-    where
-      classTypesFromFiles :: [String] -> [(String, FieldType)] -> [FilePath]
-                          -> IO [(String, [(String, FieldType)])]
-      classTypesFromFiles enums aliases hss
-          = return . concat =<< mapM (classTypesFromFile enums aliases) hss
-
-      classTypesFromFile :: [String] -> [(String, FieldType)] -> FilePath
-                         -> IO [(String, [(String, FieldType)])]
-      classTypesFromFile enums aliases hs = do
-        ParseOk (Module _ _ _ _ _ _ decls) <- parseFile hs
-        let xs = filter isDatatypeDecl decls
-        return $ map toClass xs
-            where
-              toClass (DataDecl _ _ _ _ _ [qcon] _)
-                  = toClass' qcon
-              toClass' (QualConDecl _ _ _ (RecDecl (Ident name) fs))
-                  = (name, map field fs)
-              field ((Ident fname):[], ts)
-                  = (fname, toType ts)
-              toType :: Type -> FieldType
-              toType (TyCon (UnQual (Ident t)))
-                  = case t of
-                      "String" -> TString
-                      "Text" -> TString
-                      "Int" -> TInt
-                      "Integer" -> TInt
-                      "Day" -> TDay
-                      "UTCTime" -> TUTCTime
-                      _ -> if t `elem` enums
-                           then TEnum t
-                           else maybe (TGeneral t) (TNewtype t)
-                                    $ lookup t aliases
-              toType (TyApp (TyCon (UnQual (Ident "Maybe"))) t)
-                  = case toType t of
-                      TList t -> TList t
-                      t -> TNullable t
-              toType (TyList t) = TList (toType t)
-              toType _ = error "don't support this Type"
-
---------------------------------------------------------------------------
-isEnumLikeDataDecl :: Decl -> Bool
-isEnumLikeDataDecl (DataDecl _ DataType _ _ _ xs _)
-    = all isEnumLikeConDecl xs
-isEnumLikeDataDecl _ = False
-
-isEnumLikeConDecl :: QualConDecl -> Bool
-isEnumLikeConDecl (QualConDecl _ _ _ (ConDecl _ [])) = True
-isEnumLikeConDecl _ = False
-
-enumTypes :: GenerateCsConfig -> IO [(String, [String])]
-enumTypes = enumTypesFromFiles . sources
-    where
-      enumTypesFromFiles :: [FilePath] -> IO [(String, [String])]
-      enumTypesFromFiles hss
-          = return . concat =<< mapM enumTypesFromFile hss
-
-      enumTypesFromFile :: FilePath -> IO [(String, [String])]
-      enumTypesFromFile hs = do
-        ParseOk (Module _ _ _ _ _ _ decls) <- parseFile hs
-        let xs = filter isEnumLikeDataDecl decls
-        return $ map toTuple xs
-            where
-              conName :: QualConDecl -> String
-              conName (QualConDecl _ _ _ (ConDecl (Ident name) [])) = name
-              conName _ = error "invalid enum type"
-              toTuple (DataDecl _ _ _ (Ident name) _ xs _)
-                  = (name, map conName xs)
-
---------------------------------------------------------------------------
--- | TODO : more typeable
-isNewtypeDecl :: Decl -> Bool
-isNewtypeDecl (DataDecl _ NewType _ _ _ _ _) = True
-isNewtypeDecl _ = False
-
-isTypeDecl :: Decl -> Bool
-isTypeDecl (TypeDecl _ _ _ _) = True
-isTypeDecl _ = False
-
-origType :: QualConDecl -> FieldType
-origType (QualConDecl _ _ _ (RecDecl _ [(_, tycon)]))
-    = origType' tycon
-
-origType' :: Type -> FieldType
-origType' (TyCon (UnQual (Ident t)))
-    = case t of
-        "String"  -> TString
-        "Text"    -> TString
-        "Int"     -> TInt
-        "Integer" -> TInt
-        t         -> error ("don't supported type. "<>t)
-
-usingAliases :: GenerateCsConfig -> IO [(String, FieldType)]
-usingAliases = usingAliasesFromFiles . sources
-    where
-      usingAliasesFromFiles :: [FilePath] -> IO [(String, FieldType)]
-      usingAliasesFromFiles hss
-          = return . concat =<< mapM usingAliasesFromFile hss
-
-      usingAliasesFromFile :: FilePath -> IO [(String, FieldType)]
-      usingAliasesFromFile hs = do
-        ParseOk (Module _ _ _ _ _ _ decls) <- parseFile hs
-        let xs = filter (\d -> isNewtypeDecl d || isTypeDecl d) decls
-        return $ map toTuple xs
-            where
-              toTuple (DataDecl _ NewType _ (Ident name) _ [qcon] _)
-                  = (name, origType qcon)
-              toTuple (TypeDecl _ (Ident name) _ tycon)
-                  = (name, origType' tycon)
 
 --------------------------------------------------------------------------
 retType :: Req Text -> String
@@ -329,12 +135,7 @@ rqBody req = maybe [] (pure . (T.unpack &&& const jsonReqBodyName))
 requestBodyExists :: Req Text -> Bool
 requestBodyExists = not . null . rqBody
 
-classCsForAPI :: IO String
-classCsForAPI = classCsForAPIWith def
-
-classCsForAPIWith :: GenerateCsConfig -> IO String
-classCsForAPIWith conf = (classtemplate conf) conf
-
+{--
 apiCsForAPI :: (HasForeign CSharp Text api,
              GenerateList Text (Foreign Text api)) =>
             Proxy api -> IO String
@@ -345,69 +146,11 @@ apiCsForAPIWith :: (HasForeign CSharp Text api,
                 GenerateCsConfig -> Proxy api -> IO String
 apiCsForAPIWith conf api = (apitemplate conf) conf api
 
-enumCsForAPI :: IO String
-enumCsForAPI = enumCsForAPIWith def
-
-enumCsForAPIWith :: GenerateCsConfig -> IO String
-enumCsForAPIWith conf = (enumtemplate conf) conf
-
-converterCsForAPI :: IO String
-converterCsForAPI = converterCsForAPIWith def
-
-converterCsForAPIWith :: GenerateCsConfig -> IO String
-converterCsForAPIWith conf = (convertertemplate conf) conf
-
-defClassTemplate :: GenerateCsConfig -> IO String
-defClassTemplate conf = do
-  uas <- usingAliases conf
-  classes <- classTypes conf
-  return [heredoc|/* generated by servant-csharp */
-using Newtonsoft.Json;
-using Newtonsoft.Json.Converters;
-using System;
-using System.Collections.Generic;
-
-#region type alias
-$forall (n, t) <- uas
-  using ${n} = ${showCSharpOriginalType t};
-#endregion
-
-namespace ${namespace conf}
-{
-    $forall (name, fields) <- classes
-      #region ${name}
-      [JsonObject("${name}")]
-      public class ${name}
-      {
-          $forall (fname, ftype) <- fields
-            $case ftype
-              $of TDay
-                [JsonProperty(PropertyName = "${fname}")]
-                [JsonConverter(typeof(DayConverter))]
-              $of TNullable TDay
-                [JsonProperty(PropertyName = "${fname}")]
-                [JsonConverter(typeof(DayConverter))]
-              $of TEnum _
-                [JsonProperty(PropertyName = "${fname}")]
-                [JsonConverter(typeof(StringEnumConverter))]
-              $of TNullable (TEnum _)
-                [JsonProperty(PropertyName = "${fname}")]
-                [JsonConverter(typeof(StringEnumConverter))]
-              $of TList (TEnum _)
-                [JsonProperty(PropertyName = "${fname}", ItemConverterType = typeof(StringEnumConverter))]
-              $of _
-                [JsonProperty(PropertyName = "${fname}")]
-            public ${show ftype} ${fname} { get; set; }
-      }
-      #endregion
-}
-|]
-
 defAPITemplate :: (HasForeign CSharp Text api,
                 GenerateList Text (Foreign Text api)) =>
                GenerateCsConfig -> Proxy api -> IO String
 defAPITemplate conf api = do
-  uas <- usingAliases conf
+  uas <- return [] -- usingAliases conf
   return [heredoc|/* generated by servant-csharp */
 using Newtonsoft.Json;
 using System.Collections.Generic;
@@ -498,29 +241,207 @@ namespace ${namespace conf}
     }
 }
 |]
+--}
 
-defEnumTemplate conf = do
-  es <- enumTypes conf
+--------------------------------------------------------------------------
+
+defs :: Monad m => SwagT m [(Text, Schema)]
+defs = mkSwag (M.toList . _swaggerDefinitions)
+
+pathitems :: Monad m => SwagT m [(FilePath, PathItem)]
+pathitems = mkSwag (M.toList . _swaggerPaths)
+
+convProperty :: Monad m => ParamName -> Referenced Schema -> Bool
+             -> SwagT m (ParamName, FieldType)
+convProperty pname rs req
+    = if req
+      then convProp pname rs
+      else do
+        (n, f) <- convProp pname rs
+        return (n, FNullable f)
+    where
+      convProp :: Monad m
+                  => ParamName
+                      -> Referenced Schema
+                      -> SwagT m (ParamName, FieldType)
+      convProp n (Ref (Reference s)) = convRef n s
+      convProp n (Inline s) = convert (n, s)
+
+convRef :: Monad m
+           => ParamName -> Text -> SwagT m (ParamName, FieldType)
+convRef pname tname = do
+  fs <- enums <> prims <> models
+  case lookup tname fs of
+    Just ftype -> return $ (pname, conv ftype)
+    Nothing -> error $ T.unpack $ "not found " <> pname
+  where
+    conv :: FieldType -> FieldType
+    conv f | isFEnum f = FRefEnum tname
+           | isFPrim f = FRefPrim tname f
+           | isFObj  f = FRefObject tname
+  
+convObject :: Monad m => (Text, Schema) -> SwagT m (Text, FieldType)
+convObject (name, s) = do
+  return . (name,) . FObject name =<< fields
+    where
+      fields :: Monad m => SwagT m [(ParamName, FieldType)]
+      fields = mapM (\(p, s) -> (convProperty p s (isReq p))) props
+      props :: [(ParamName, Referenced Schema)]
+      props = M.toList (_schemaProperties s)
+      isReq :: ParamName -> Bool
+      isReq pname = pname `elem` reqs
+      reqs :: [ParamName]
+      reqs = _schemaRequired s
+
+convert :: Monad m => (Text, Schema) -> SwagT m (Text, FieldType)
+convert (name, s) = do
+  if not $ null enums'
+  then return $ (name, FEnum name enums')
+  else case type' of
+         SwaggerString -> maybe (return (name, FString))
+                                convByFormat
+                                format'
+         SwaggerInteger -> return (name, FInteger)
+         SwaggerNumber -> return (name, FNumber)
+         SwaggerBoolean -> return (name, FBool)
+         SwaggerArray -> maybe (error "fail to convert SwaggerArray")
+                               convByItemType
+                               items'
+         SwaggerNull -> error "convert don't support SwaggerNull yet"
+         SwaggerObject -> convObject (name, s)
+    where
+      param' = _schemaParamSchema s
+      items' = _paramSchemaItems param'
+      type' = _paramSchemaType param'
+      enums' = maybe [] id $ _paramSchemaEnum param'
+      format' = _paramSchemaFormat param'
+      convByFormat :: Monad m => Text -> SwagT m (Text, FieldType)
+      convByFormat "date" = return (name, FDay)
+      convByFormat "yyyy-mm-ddThh:MM:ssZ" = return (name, FUTCTime)
+      convByItemType :: Monad m
+                        => SwaggerItems Schema -> SwagT m (Text, FieldType)
+      convByItemType (SwaggerItemsObject (Ref (Reference s))) = do
+                      (n, t) <- convRef name s
+                      return (n, FList t)
+      convByItemType (SwaggerItemsPrimitive _ _)
+          = error "don't support SwaggerItemsPrimitive yet"
+      convByItemType (SwaggerItemsArray _)
+          = error "don't support SwaggerItemsArray yet"
+
+enums :: Monad m => SwagT m [(Text, FieldType)]
+enums = filterM (return.isFEnum.snd) =<< mapM convert =<< defs
+
+prims :: Monad m => SwagT m [(Text, FieldType)]
+prims = filterM (return.isFPrim.snd) =<< mapM convert =<< defs
+
+models :: Monad m => SwagT m [(Text, FieldType)]
+models = filterM (return.isFObj.snd) =<< mapM convert =<< defs
+enumCs :: Monad m => SwagT m String
+enumCs = do
+  es <- mapM (return.snd) =<< enums
   return [heredoc|/* generated by servant-csharp */
-namespace ${namespace conf}
+namespace ServantClientBook
 {
-    $forall (name, cs) <- es
-      #region ${name}
-      public enum ${name}
+    $forall FEnum name cs <- es
+      #region ${T.unpack name}
+      public enum ${T.unpack name}
       {
-          $forall c <- cs
-            ${c},
+          $forall String c <- cs
+            ${T.unpack c},
       }
       #endregion
 }
 |]
 
-defConvTemplate conf = do
+showCSharpOriginalType :: FieldType -> String
+showCSharpOriginalType FInteger = "System.Int64"
+showCSharpOriginalType FNumber = "System.Double"
+showCSharpOriginalType FString = "System.String"
+showCSharpOriginalType FDay = "System.DateTime"
+showCSharpOriginalType FUTCTime = "System.DateTime"
+showCSharpOriginalType _ = error "don't support this type."
+
+show' :: FieldType -> String
+show' FInteger = "int"
+show' FNumber = "double"
+show' FString = "string"
+show' FBool = "bool"
+show' FDay = "DateTime"
+show' FUTCTime = "DateTime"
+show' (FEnum name _) = T.unpack name
+show' (FObject name _) = T.unpack name
+show' (FList t) = "List<" <> show' t <> ">"
+show' (FNullable t) = case nullable t of
+                        CVal -> show' t <> "?"
+                        CRef -> show' t
+                        CSt  -> "Nullable<" <> show' t <> ">"
+show' (FRefObject name) = T.unpack name
+show' (FRefEnum name) = T.unpack name
+show' (FRefPrim name _) = T.unpack name
+
+converterType :: FieldType -> ConverterType
+converterType FDay = DayConv
+converterType (FRefPrim _ FDay) = DayConv
+converterType (FEnum _ _) = EnumConv
+converterType (FRefEnum _) = EnumConv
+converterType (FNullable t) = converterType t
+converterType (FList t) = case converterType t of
+                            DayConv -> ItemConv DayConv
+                            EnumConv -> ItemConv EnumConv
+                            t' -> t'
+converterType _ = NoConv
+
+
+classCs :: Monad m => SwagT m String
+classCs = do
+  ps <- prims
+  ms <- models
   return [heredoc|/* generated by servant-csharp */
+using Newtonsoft.Json;
+using Newtonsoft.Json.Converters;
+using System;
+using System.Collections.Generic;
+
+#region type alias
+$forall (n, t) <- ps
+  using ${T.unpack n} = ${showCSharpOriginalType t};
+#endregion
+
+namespace ${namespace def}
+{
+    $forall (_, FObject name' fields) <- ms
+      $let name = T.unpack name'
+        #region ${name}
+        [JsonObject("${name}")]
+        public class ${name}
+        {
+            $forall (fname', ftype) <- fields
+              $let fname = T.unpack fname'
+                $case converterType ftype
+                  $of DayConv
+                    [JsonProperty(PropertyName = "${fname}")]
+                    [JsonConverter(typeof(DayConverter))]
+                  $of ItemConv DayConv
+                    [JsonProperty(PropertyName = "${fname}", ItemConverterType = typeof(DayConverter))]
+                  $of EnumConv
+                    [JsonProperty(PropertyName = "${fname}")]
+                    [JsonConverter(typeof(StringEnumConverter))]
+                  $of ItemConv EnumConv
+                    [JsonProperty(PropertyName = "${fname}", ItemConverterType = typeof(StringEnumConverter))]
+                  $of _
+                    [JsonProperty(PropertyName = "${fname}")]
+                public ${show' ftype} ${fname} { get; set; }
+        }
+        #endregion
+}
+|]
+
+converterCs :: Monad m => SwagT m String
+converterCs = return [heredoc|/* generated by servant-csharp */
 using Newtonsoft.Json;
 using System;
 
-namespace ${namespace conf}
+namespace ${namespace def}
 {
     public class DayConverter : JsonConverter
     {
@@ -543,63 +464,49 @@ namespace ${namespace conf}
 }
 |]
 
---------------------------------------------------------------------------
-
-assemblyInfoCsForAPI :: IO String
-assemblyInfoCsForAPI = assemblyInfoCsForAPIWith def
-
-assemblyInfoCsForAPIWith :: GenerateCsConfig -> IO String
-assemblyInfoCsForAPIWith conf = (assemblyinfotemplate conf) conf
-
-defAssemblyInfoTemplate :: GenerateCsConfig -> IO String
-defAssemblyInfoTemplate conf = do
+assemblyInfoCs :: IO String
+assemblyInfoCs = do
   (year, _, _) <- fmap (toGregorian . utctDay) getCurrentTime
-  guid <- maybe (toString <$> UUID.nextRandom) return $ guid conf
+  guid' <- maybe UUID.nextRandom return $ guid def
   return [heredoc|
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
-[assembly: AssemblyTitle("${namespace conf}")]
+[assembly: AssemblyTitle("${namespace def}")]
 [assembly: AssemblyDescription("")]
 [assembly: AssemblyConfiguration("")]
 [assembly: AssemblyCompany("")]
-[assembly: AssemblyProduct("${namespace conf}")]
+[assembly: AssemblyProduct("${namespace def}")]
 [assembly: AssemblyCopyright("Copyright ©  ${show year}")]
 [assembly: AssemblyTrademark("")]
 [assembly: AssemblyCulture("")]
 
 [assembly: ComVisible(false)]
 
-[assembly: Guid("${guid}")]
+[assembly: Guid("${toString guid'}")]
 
 // [assembly: AssemblyVersion("1.0.*")]
 [assembly: AssemblyVersion("1.0.0.0")]
 [assembly: AssemblyFileVersion("1.0.0.0")]
 |]
 
---------------------------------------------------------------------------
-
-csprojForAPI :: IO String
-csprojForAPI = csprojForAPIWith def
-
-csprojForAPIWith :: GenerateCsConfig -> IO String
-csprojForAPIWith conf = (csprojtemplate conf) conf
-
-defCsprojTemplate :: GenerateCsConfig -> IO String
-defCsprojTemplate conf = do
-  guid <- maybe ((map toUpper . toString) <$> UUID.nextRandom) return $ guid conf
+projectCsproj :: IO String
+projectCsproj = do
+  guid' <- maybe ((map toUpper . toString) <$> UUID.nextRandom)
+                 (return . toString)
+                 $ guid def
   return [heredoc|<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="14.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
   <PropertyGroup>
     <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
     <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
-    <ProjectGuid>{${guid}}</ProjectGuid>
+    <ProjectGuid>{${guid'}}</ProjectGuid>
     <OutputType>Library</OutputType>
     <AppDesignerFolder>Properties</AppDesignerFolder>
-    <RootNamespace>${namespace conf}</RootNamespace>
-    <AssemblyName>${namespace conf}</AssemblyName>
+    <RootNamespace>${namespace def}</RootNamespace>
+    <AssemblyName>${namespace def}</AssemblyName>
     <TargetFrameworkVersion>v4.5.2</TargetFrameworkVersion>
     <FileAlignment>512</FileAlignment>
   </PropertyGroup>
@@ -632,10 +539,10 @@ defCsprojTemplate conf = do
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="${apiCsName conf}" />
-    <Compile Include="${converterCsName conf}" />
-    <Compile Include="${classCsName conf}" />
-    <Compile Include="${enumCsName conf}" />
+    <Compile Include="${apiCsName def}" />
+    <Compile Include="${converterCsName def}" />
+    <Compile Include="${classCsName def}" />
+    <Compile Include="${enumCsName def}" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
