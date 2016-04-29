@@ -36,7 +36,8 @@ import Data.Proxy
 import Data.Swagger hiding (namespace)
 import Data.Text as T (Text, unpack)
 import Data.Time.Clock (UTCTime(..), getCurrentTime)
-import Data.Time.Calendar (toGregorian)
+import Data.Time.Calendar (Day(..), toGregorian)
+import Data.Word
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath ((</>),(<.>))
 import Data.UUID.Types (toString, UUID)
@@ -45,7 +46,7 @@ import Servant.Foreign
 import Servant.Swagger
 import Text.Heredoc
 
-import CS.Common (CSharp, getEndpoints)
+import CS.Common
 import CS.JsonDotNet.Internal
 import CS.JsonDotNet.Base
 

@@ -11,12 +11,16 @@ import Data.Text
 import Data.Time (UTCTime)
 import Data.Time.Calendar (Day)
 import Data.Typeable
+import Data.Word
 import Servant.Foreign
 
 data CSharp
 
 instance HasForeignType CSharp Text a => HasForeignType CSharp Text [a] where
     typeFor lang ftype (Proxy :: Proxy [t]) = "List<" <> typeFor lang ftype (Proxy :: Proxy t) <> ">"
+
+instance HasForeignType CSharp Text a => HasForeignType CSharp Text (Maybe [a]) where
+    typeFor lang ftype (Proxy :: Proxy (Maybe [t])) = typeFor lang ftype (Proxy :: Proxy [t])
 
 instance HasForeignType CSharp Text a => HasForeignType CSharp Text (Maybe a) where
     typeFor lang ftype (Proxy :: Proxy (Maybe t)) = "Nullable<" <> typeFor lang ftype (Proxy :: Proxy t) <> ">"
@@ -28,6 +32,32 @@ instance {-# OVERLAPPING #-} HasForeignType CSharp Text Int where
     typeFor _ _ _ = "int"
 instance {-# OVERLAPPING #-} HasForeignType CSharp Text (Maybe Int) where
     typeFor _ _ _ = "int?"
+instance {-# OVERLAPPING #-} HasForeignType CSharp Text Word8 where
+    typeFor _ _ _ = "int"
+instance {-# OVERLAPPING #-} HasForeignType CSharp Text (Maybe Word8) where
+    typeFor _ _ _ = "int?"
+instance {-# OVERLAPPING #-} HasForeignType CSharp Text Word16 where
+    typeFor _ _ _ = "int"
+instance {-# OVERLAPPING #-} HasForeignType CSharp Text (Maybe Word16) where
+    typeFor _ _ _ = "int?"
+instance {-# OVERLAPPING #-} HasForeignType CSharp Text Word32 where
+    typeFor _ _ _ = "int"
+instance {-# OVERLAPPING #-} HasForeignType CSharp Text (Maybe Word32) where
+    typeFor _ _ _ = "int?"
+instance {-# OVERLAPPING #-} HasForeignType CSharp Text Word64 where
+    typeFor _ _ _ = "int"
+instance {-# OVERLAPPING #-} HasForeignType CSharp Text (Maybe Word64) where
+    typeFor _ _ _ = "int?"
+
+instance {-# OVERLAPPING #-} HasForeignType CSharp Text Float where
+    typeFor _ _ _ = "float"
+instance {-# OVERLAPPING #-} HasForeignType CSharp Text (Maybe Float) where
+    typeFor _ _ _ = "float?"
+
+instance {-# OVERLAPPING #-} HasForeignType CSharp Text Double where
+    typeFor _ _ _ = "double"
+instance {-# OVERLAPPING #-} HasForeignType CSharp Text (Maybe Double) where
+    typeFor _ _ _ = "double?"
 
 instance {-# OVERLAPPING #-} HasForeignType CSharp Text Text where
     typeFor _ _ _ = "string"
