@@ -1,4 +1,6 @@
-module CS ( GenerateCsConfig(..)
+module CS ( generateCsForAPI
+
+          , GenerateCsConfig(..)
           , def
           ) where
 
