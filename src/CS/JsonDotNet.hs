@@ -76,6 +76,7 @@ generateCsForAPI :: (HasSwagger api, HasForeign CSharp Text api,
 generateCsForAPI conf api = do
   let outDir = "gen" </> namespace conf
       swagger = toSwagger api
+  createDirectoryIfMissing True $ outDir </> "Properties"
   writeFile (outDir </> "AssemblyInfo.cs") =<< assemblyInfoCs conf
   writeFile (outDir </> namespace conf <.> "csproj") =<< projectCsproj conf
   writeFile (outDir </> classCsName conf)
